@@ -1,4 +1,12 @@
-# TORII Experiment (Patch Token -> Super-Node Graph Alignment)
+# TORII Experiments
+
+This folder now has a shared core module plus two experiment entry points:
+
+- `exp/torii_core.py`: reusable graph construction and alignment utilities
+- `exp/run_torii_alignment_exp.py`: pairwise same-vs-different alignment analysis
+- `exp/run_torii_fewshot_exp.py`: episodic few-shot image classification
+
+## 1. Pairwise Alignment Experiment
 
 This experiment uses images in `exp_data` with class labels parsed from filenames like `*_class185.png`.
 
@@ -52,3 +60,58 @@ Optional parameters:
 - `exp/output/visuals/*_clusters.png`: image + patch-cluster map
 
 Interpretation: lower total score indicates better alignment under the defined losses.
+
+## 2. Few-Shot Classification Experiment (MiniImageNet-style)
+
+Expected dataset structure (matching your txt example):
+
+```text
+dataset/miniImageNet--ravi/
+   images/
+      n0193011200000001.jpg
+      ...
+   train.csv
+   val.csv
+   test.csv
+```
+
+Each CSV must include:
+
+```text
+filename,label
+n0193011200000001.jpg,n01930112
+```
+
+Run 5-way 1-shot evaluation on `test.csv`:
+
+```bash
+python exp/run_torii_fewshot_exp.py \
+   --dataset-root dataset/miniImageNet--ravi \
+   --split test \
+   --episodes 100 \
+   --way 5 \
+   --shot 1 \
+   --query 5 \
+   --pretrained
+```
+
+Run 5-way 5-shot with learned transport (slower):
+
+```bash
+python exp/run_torii_fewshot_exp.py \
+   --dataset-root dataset/miniImageNet--ravi \
+   --split test \
+   --episodes 100 \
+   --way 5 \
+   --shot 5 \
+   --query 5 \
+   --transport-mode learned \
+   --perm-steps 50 \
+   --pretrained
+```
+
+Few-shot outputs:
+
+- `exp/output_fewshot/episode_metrics.csv`: per-episode accuracy
+- `exp/output_fewshot/query_predictions.csv`: per-query prediction and class scores
+- `exp/output_fewshot/summary.txt`: overall accuracy and confidence interval
