@@ -211,7 +211,7 @@ def optimize_learnable_transport(
     final_cycle = None
     final_entropy = None
 
-    for _ in range(max(1, steps)):
+    for iter in range(max(1, steps)):
         p_ab = torch.softmax(logits_ab, dim=1)
         p_ba = torch.softmax(logits_ba, dim=1)
 
@@ -236,8 +236,8 @@ def optimize_learnable_transport(
         final_cycle = cycle_loss
         final_entropy = entropy
 
-        if steps % 20 == 0:
-            print(f"  step {_+1}/{steps}, total={total.item():.4f}, node={losses['node_loss'].item():.4f}, edge={losses['edge_loss'].item():.4f}, path={losses['path_loss'].item():.4f}, cycle={cycle_loss.item():.4f}, entropy={entropy.item():.4f}")
+        if (steps <= 10) or (iter % (steps // 10) == 0):
+            print(f"  step {iter+1}/{steps}, total={total.item():.4f}, node={losses['node_loss'].item():.4f}, edge={losses['edge_loss'].item():.4f}, path={losses['path_loss'].item():.4f}, cycle={cycle_loss.item():.4f}, entropy={entropy.item():.4f}")
 
     assert final_losses is not None and final_total is not None
     return {
