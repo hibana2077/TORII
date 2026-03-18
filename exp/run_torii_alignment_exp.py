@@ -230,11 +230,14 @@ def optimize_learnable_transport(
         optimizer.zero_grad()
         total.backward()
         optimizer.step()
-
+        
         final_losses = losses
         final_total = total
         final_cycle = cycle_loss
         final_entropy = entropy
+
+        if steps % 20 == 0:
+            print(f"  step {_+1}/{steps}, total={total.item():.4f}, node={losses['node_loss'].item():.4f}, edge={losses['edge_loss'].item():.4f}, path={losses['path_loss'].item():.4f}, cycle={cycle_loss.item():.4f}, entropy={entropy.item():.4f}")
 
     assert final_losses is not None and final_total is not None
     return {
@@ -354,6 +357,7 @@ def run(args):
             ga = graphs[i]
             gb = graphs[j]
             if args.transport_mode == "learned":
+                print(f"Optimizing transport between {ga.image_path.name} and {gb.image_path.name}...")
                 scores = optimize_learnable_transport(
                     ga,
                     gb,
