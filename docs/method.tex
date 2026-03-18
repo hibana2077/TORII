@@ -1,0 +1,210 @@
+% =========================================================
+% Required packages
+% \usepackage{amsmath,amssymb,amsfonts,bm}
+% \usepackage{algorithm}
+% \usepackage{algpseudocode}
+% =========================================================
+
+\subsection{Variable-Cardinality Bidirectional Super-Node Alignment}
+
+Given two images, we first coarsen their patch graphs into super-node graphs
+with possibly different numbers of nodes:
+\[
+G^A=(V^A,W^A), \qquad G^B=(V^B,W^B),
+\]
+where \(W^A \in \mathbb{R}^{n_A \times n_A}\) and
+\(W^B \in \mathbb{R}^{n_B \times n_B}\), with \(n_A\) and \(n_B\) not
+necessarily equal.
+Let
+\[
+Z^A = [z_1^A,\dots,z_{n_A}^A]^\top \in \mathbb{R}^{n_A \times d},
+\qquad
+Z^B = [z_1^B,\dots,z_{n_B}^B]^\top \in \mathbb{R}^{n_B \times d}
+\]
+denote the corresponding super-node features.
+
+\paragraph{Cross-graph soft transport.}
+To align graphs with different cardinalities, we do not vectorize pairwise
+distances into a fixed-length representation. Instead, we compute a soft
+cross-graph transport from node similarities:
+\[
+S_{ij} = \mathrm{sim}(z_i^A, z_j^B),
+\]
+where \(\mathrm{sim}(\cdot,\cdot)\) can be cosine similarity or dot product.
+
+We then define two directional transport matrices:
+\begin{align}
+P^{A\leftarrow B}_{ij}
+&=
+\frac{\exp(S_{ij}/\tau_p)}
+{\sum\limits_{k=1}^{n_B}\exp(S_{ik}/\tau_p)}
+\in \mathbb{R}^{n_A \times n_B}, \\[4pt]
+P^{B\leftarrow A}_{ji}
+&=
+\frac{\exp(S_{ij}/\tau_p)}
+{\sum\limits_{k=1}^{n_A}\exp(S_{kj}/\tau_p)}
+\in \mathbb{R}^{n_B \times n_A},
+\end{align}
+where \(\tau_p>0\) is a temperature parameter.
+The forward transport \(P^{A\leftarrow B}\) maps graph \(B\) into the coordinate
+system of graph \(A\), while \(P^{B\leftarrow A}\) provides the reverse mapping.
+This bidirectional design explicitly removes the asymmetry of one-sided
+transport.
+
+\paragraph{Direct node alignment.}
+To impose direct supervision on node correspondence, we align transported
+super-node features in both directions:
+\begin{equation}
+\mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}
+=
+\left\| Z^A - P^{A\leftarrow B} Z^B \right\|_F^2
++
+\left\| Z^B - P^{B\leftarrow A} Z^A \right\|_F^2.
+\end{equation}
+
+\paragraph{Bidirectional local edge consistency.}
+We further align first-order graph relations under both transports:
+\begin{equation}
+\mathcal{L}_{\mathrm{edge}}^{\mathrm{bi}}
+=
+\left\| W^A - P^{A\leftarrow B} W^B (P^{A\leftarrow B})^\top \right\|_F^2
++
+\left\| W^B - P^{B\leftarrow A} W^A (P^{B\leftarrow A})^\top \right\|_F^2.
+\end{equation}
+
+\paragraph{Soft path geometry.}
+To capture higher-order consistency beyond local edges, we define the soft
+geodesic distance on each graph:
+\begin{equation}
+D_\tau(i,j)
+=
+-\tau_g \log
+\sum_{\pi \in \Pi(i,j)}
+\exp\!\left(
+-\frac{c(\pi)}{\tau_g}
+\right),
+\end{equation}
+where \(\Pi(i,j)\) is the set of valid paths from node \(i\) to node \(j\),
+\(c(\pi)\) is the path cost obtained by summing edge weights along path \(\pi\),
+and \(\tau_g>0\) is the path temperature.
+Let \(D_\tau^A \in \mathbb{R}^{n_A \times n_A}\) and
+\(D_\tau^B \in \mathbb{R}^{n_B \times n_B}\) be the resulting soft
+path-geometry matrices.
+
+\paragraph{Bidirectional path-structure alignment.}
+We then align multi-hop relational geometry in both directions:
+\begin{equation}
+\mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}
+=
+\left\| D_\tau^A - P^{A\leftarrow B} D_\tau^B (P^{A\leftarrow B})^\top \right\|_F^2
++
+\left\| D_\tau^B - P^{B\leftarrow A} D_\tau^A (P^{B\leftarrow A})^\top \right\|_F^2.
+\end{equation}
+
+\paragraph{Final objective.}
+Our final objective augments any base matching loss
+\(\mathcal{L}_{\mathrm{base}}\) with direct node alignment and bidirectional
+structural regularization:
+\begin{equation}
+\mathcal{L}_{\mathrm{total}}
+=
+\mathcal{L}_{\mathrm{base}}
++
+\lambda_n \mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}
++
+\lambda_e \mathcal{L}_{\mathrm{edge}}^{\mathrm{bi}}
++
+\lambda_p \mathcal{L}_{\mathrm{path}}^{\mathrm{bi}},
+\end{equation}
+where \(\lambda_n,\lambda_e,\lambda_p \ge 0\) control the strengths of node,
+local-edge, and multi-hop path alignment, respectively.
+
+\paragraph{Remark.}
+When a simpler variant is preferred, one may set \(\lambda_e=0\) and keep only
+\(\mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}\) and
+\(\mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}\), which already supports graphs
+with different numbers of super-nodes while enforcing both direct node
+alignment and higher-order structural consistency.
+
+\begin{algorithm}[t]
+\caption{Variable-Cardinality Bidirectional Super-Node Alignment}
+\label{alg:bidirectional_supernode_alignment}
+\begin{algorithmic}[1]
+\Require
+Patch features \(X^A, X^B\);
+target super-node counts \(n_A, n_B\);
+temperatures \(\tau_p, \tau_g\);
+weights \(\lambda_n,\lambda_e,\lambda_p\)
+\Ensure
+\(\mathcal{L}_{\mathrm{total}}\)
+
+\State \((Z^A, W^A) \gets \mathrm{CoarsenGraph}(X^A, n_A)\)
+\State \((Z^B, W^B) \gets \mathrm{CoarsenGraph}(X^B, n_B)\)
+
+\For{$i=1$ to $n_A$}
+    \For{$j=1$ to $n_B$}
+        \State \(S_{ij} \gets \mathrm{sim}(z_i^A, z_j^B)\)
+    \EndFor
+\EndFor
+
+\State Compute forward transport:
+\[
+P^{A\leftarrow B}_{ij}
+=
+\frac{\exp(S_{ij}/\tau_p)}
+{\sum_{k=1}^{n_B}\exp(S_{ik}/\tau_p)}
+\]
+\State Compute reverse transport:
+\[
+P^{B\leftarrow A}_{ji}
+=
+\frac{\exp(S_{ij}/\tau_p)}
+{\sum_{k=1}^{n_A}\exp(S_{kj}/\tau_p)}
+\]
+
+\State \(D_\tau^A \gets \mathrm{SoftGeodesic}(W^A,\tau_g)\)
+\State \(D_\tau^B \gets \mathrm{SoftGeodesic}(W^B,\tau_g)\)
+
+\State
+\(
+\mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}
+\gets
+\| Z^A - P^{A\leftarrow B} Z^B \|_F^2
++
+\| Z^B - P^{B\leftarrow A} Z^A \|_F^2
+\)
+
+\State
+\(
+\mathcal{L}_{\mathrm{edge}}^{\mathrm{bi}}
+\gets
+\| W^A - P^{A\leftarrow B} W^B (P^{A\leftarrow B})^\top \|_F^2
++
+\| W^B - P^{B\leftarrow A} W^A (P^{B\leftarrow A})^\top \|_F^2
+\)
+
+\State
+\(
+\mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}
+\gets
+\| D_\tau^A - P^{A\leftarrow B} D_\tau^B (P^{A\leftarrow B})^\top \|_F^2
++
+\| D_\tau^B - P^{B\leftarrow A} D_\tau^A (P^{B\leftarrow A})^\top \|_F^2
+\)
+
+\State
+\(
+\mathcal{L}_{\mathrm{total}}
+\gets
+\mathcal{L}_{\mathrm{base}}
++
+\lambda_n \mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}
++
+\lambda_e \mathcal{L}_{\mathrm{edge}}^{\mathrm{bi}}
++
+\lambda_p \mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}
+\)
+
+\State \Return \(\mathcal{L}_{\mathrm{total}}\)
+\end{algorithmic}
+\end{algorithm}
