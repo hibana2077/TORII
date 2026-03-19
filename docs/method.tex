@@ -24,9 +24,8 @@ Z^B = [z_1^B,\dots,z_{n_B}^B]^\top \in \mathbb{R}^{n_B \times d}
 denote the corresponding super-node features.
 
 \paragraph{Cross-graph soft transport.}
-To align graphs with different cardinalities, we do not vectorize pairwise
-distances into a fixed-length representation. Instead, we compute a soft
-cross-graph transport from node similarities:
+To align graphs with different cardinalities, we compute a soft cross-graph
+transport from node similarities:
 \[
 S_{ij} = \mathrm{sim}(z_i^A, z_j^B),
 \]
@@ -38,7 +37,7 @@ P^{A\leftarrow B}_{ij}
 &=
 \frac{\exp(S_{ij}/\tau_p)}
 {\sum\limits_{k=1}^{n_B}\exp(S_{ik}/\tau_p)}
-\in \mathbb{R}^{n_A \times n_B}, \\[4pt]
+\in \mathbb{R}^{n_A \times n_B}, \\
 P^{B\leftarrow A}_{ji}
 &=
 \frac{\exp(S_{ij}/\tau_p)}
@@ -46,10 +45,10 @@ P^{B\leftarrow A}_{ji}
 \in \mathbb{R}^{n_B \times n_A},
 \end{align}
 where \(\tau_p>0\) is a temperature parameter.
-The forward transport \(P^{A\leftarrow B}\) maps graph \(B\) into the coordinate
-system of graph \(A\), while \(P^{B\leftarrow A}\) provides the reverse mapping.
-This bidirectional design explicitly removes the asymmetry of one-sided
-transport.
+The forward transport \(P^{A\leftarrow B}\) maps graph \(B\) into the
+coordinate system of graph \(A\), while \(P^{B\leftarrow A}\) provides the
+reverse mapping. This bidirectional design explicitly removes the asymmetry of
+one-sided transport.
 
 \paragraph{Direct node alignment.}
 To impose direct supervision on node correspondence, we align transported
@@ -72,38 +71,9 @@ We further align first-order graph relations under both transports:
 \left\| W^B - P^{B\leftarrow A} W^A (P^{B\leftarrow A})^\top \right\|_F^2.
 \end{equation}
 
-\paragraph{Soft path geometry.}
-To capture higher-order consistency beyond local edges, we define the soft
-geodesic distance on each graph:
-\begin{equation}
-D_\tau(i,j)
-=
--\tau_g \log
-\sum_{\pi \in \Pi(i,j)}
-\exp\!\left(
--\frac{c(\pi)}{\tau_g}
-\right),
-\end{equation}
-where \(\Pi(i,j)\) is the set of valid paths from node \(i\) to node \(j\),
-\(c(\pi)\) is the path cost obtained by summing edge weights along path \(\pi\),
-and \(\tau_g>0\) is the path temperature.
-Let \(D_\tau^A \in \mathbb{R}^{n_A \times n_A}\) and
-\(D_\tau^B \in \mathbb{R}^{n_B \times n_B}\) be the resulting soft
-path-geometry matrices.
-
-\paragraph{Bidirectional path-structure alignment.}
-We then align multi-hop relational geometry in both directions:
-\begin{equation}
-\mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}
-=
-\left\| D_\tau^A - P^{A\leftarrow B} D_\tau^B (P^{A\leftarrow B})^\top \right\|_F^2
-+
-\left\| D_\tau^B - P^{B\leftarrow A} D_\tau^A (P^{B\leftarrow A})^\top \right\|_F^2.
-\end{equation}
-
 \paragraph{Final objective.}
 Our final objective augments any base matching loss
-\(\mathcal{L}_{\mathrm{base}}\) with direct node alignment and bidirectional
+\(\mathcal{L}_{\mathrm{base}}\) with direct node alignment and local
 structural regularization:
 \begin{equation}
 \mathcal{L}_{\mathrm{total}}
@@ -112,19 +82,16 @@ structural regularization:
 +
 \lambda_n \mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}
 +
-\lambda_e \mathcal{L}_{\mathrm{edge}}^{\mathrm{bi}}
-+
-\lambda_p \mathcal{L}_{\mathrm{path}}^{\mathrm{bi}},
+\lambda_e \mathcal{L}_{\mathrm{edge}}^{\mathrm{bi}},
 \end{equation}
-where \(\lambda_n,\lambda_e,\lambda_p \ge 0\) control the strengths of node,
-local-edge, and multi-hop path alignment, respectively.
+where \(\lambda_n,\lambda_e \ge 0\) control the strengths of node and
+local-edge alignment, respectively.
 
 \paragraph{Remark.}
-When a simpler variant is preferred, one may set \(\lambda_e=0\) and keep only
-\(\mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}\) and
-\(\mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}\), which already supports graphs
-with different numbers of super-nodes while enforcing both direct node
-alignment and higher-order structural consistency.
+This simplified variant is sufficient for our setting: it supports graphs with
+different numbers of super-nodes while enforcing both direct node-level
+alignment and first-order structural consistency, without introducing
+additional higher-order path regularization.
 
 \begin{algorithm}[t]
 \caption{Variable-Cardinality Bidirectional Super-Node Alignment}
@@ -133,8 +100,8 @@ alignment and higher-order structural consistency.
 \Require
 Patch features \(X^A, X^B\);
 target super-node counts \(n_A, n_B\);
-temperatures \(\tau_p, \tau_g\);
-weights \(\lambda_n,\lambda_e,\lambda_p\)
+temperature \(\tau_p\);
+weights \(\lambda_n,\lambda_e\)
 \Ensure
 \(\mathcal{L}_{\mathrm{total}}\)
 
@@ -162,9 +129,6 @@ P^{B\leftarrow A}_{ji}
 {\sum_{k=1}^{n_A}\exp(S_{kj}/\tau_p)}
 \]
 
-\State \(D_\tau^A \gets \mathrm{SoftGeodesic}(W^A,\tau_g)\)
-\State \(D_\tau^B \gets \mathrm{SoftGeodesic}(W^B,\tau_g)\)
-
 \State
 \(
 \mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}
@@ -185,15 +149,6 @@ P^{B\leftarrow A}_{ji}
 
 \State
 \(
-\mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}
-\gets
-\| D_\tau^A - P^{A\leftarrow B} D_\tau^B (P^{A\leftarrow B})^\top \|_F^2
-+
-\| D_\tau^B - P^{B\leftarrow A} D_\tau^A (P^{B\leftarrow A})^\top \|_F^2
-\)
-
-\State
-\(
 \mathcal{L}_{\mathrm{total}}
 \gets
 \mathcal{L}_{\mathrm{base}}
@@ -201,8 +156,6 @@ P^{B\leftarrow A}_{ji}
 \lambda_n \mathcal{L}_{\mathrm{node}}^{\mathrm{bi}}
 +
 \lambda_e \mathcal{L}_{\mathrm{edge}}^{\mathrm{bi}}
-+
-\lambda_p \mathcal{L}_{\mathrm{path}}^{\mathrm{bi}}
 \)
 
 \State \Return \(\mathcal{L}_{\mathrm{total}}\)
