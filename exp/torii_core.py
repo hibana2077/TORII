@@ -218,14 +218,14 @@ def optimize_learnable_transport(
         final_cycle = cycle_loss
         final_entropy = entropy
 
-        if (steps <= 10) or (iter_idx % max(1, steps // 10) == 0):
-            print(
-                f"  step {iter_idx + 1}/{steps}, total={total.item():.4f}, "
-                f"node={losses['node_loss'].item():.4f}, "
-                f"edge={losses['edge_loss'].item():.4f}, "
-                f"path={losses['path_loss'].item():.4f}, "
-                f"cycle={cycle_loss.item():.4f}, entropy={entropy.item():.4f}"
-            )
+        # if (steps <= 10) or (iter_idx % max(1, steps // 10) == 0):
+            # print(
+            #     f"  step {iter_idx + 1}/{steps}, total={total.item():.4f}, "
+            #     f"node={losses['node_loss'].item():.4f}, "
+            #     f"edge={losses['edge_loss'].item():.4f}, "
+            #     f"path={losses['path_loss'].item():.4f}, "
+            #     f"cycle={cycle_loss.item():.4f}, entropy={entropy.item():.4f}"
+            # )
 
     assert final_losses is not None and final_total is not None
     assert final_cycle is not None and final_entropy is not None

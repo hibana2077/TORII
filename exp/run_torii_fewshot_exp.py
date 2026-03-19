@@ -245,8 +245,13 @@ def run(args):
 
     sample_csv = out_dir / "query_predictions.csv"
     if sample_rows:
+        base_fields = ["episode", "query_image", "gt_label", "pred_label", "correct"]
+        score_fields = sorted(
+            {k for row in sample_rows for k in row.keys() if k.startswith("score_")}
+        )
+        sample_fieldnames = base_fields + score_fields
         with sample_csv.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(sample_rows[0].keys()))
+            writer = csv.DictWriter(f, fieldnames=sample_fieldnames)
             writer.writeheader()
             writer.writerows(sample_rows)
 

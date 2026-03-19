@@ -1,0 +1,13 @@
+dataset_root=dataset/miniImageNet--ravi
+split=test
+episodes=10
+way=5
+shot=1
+query=5
+transport_mode=learned
+total_queries=250
+total_correct=213
+overall_acc=0.852000
+episode_acc_mean=0.852000
+episode_acc_std=0.111786
+episode_acc_ci95=0.069285
