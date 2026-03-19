@@ -25,6 +25,7 @@ class GraphData:
     patch_grid_hw: Tuple[int, int]
     assignments: np.ndarray
     super_features: torch.Tensor
+    super_coords: torch.Tensor
     adjacency: torch.Tensor
 
 
@@ -101,13 +102,111 @@ def kmeans_torch(x: torch.Tensor, n_clusters: int, n_iters: int = 30, seed: int 
     return assign, centroids
 
 
-def build_super_graph(tokens: torch.Tensor, n_clusters: int, seed: int):
-    assign, centroids = kmeans_torch(tokens, n_clusters=n_clusters, seed=seed)
-    zn = F.normalize(centroids, dim=1)
+def build_patch_coordinates(
+    grid_hw: Tuple[int, int],
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    grid_h, grid_w = grid_hw
+    ys = torch.arange(grid_h, device=device, dtype=dtype)
+    xs = torch.arange(grid_w, device=device, dtype=dtype)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+
+    if grid_h > 1:
+        yy = yy / float(grid_h - 1)
+    else:
+        yy = torch.zeros_like(yy)
+
+    if grid_w > 1:
+        xx = xx / float(grid_w - 1)
+    else:
+        xx = torch.zeros_like(xx)
+
+    return torch.stack([yy.reshape(-1), xx.reshape(-1)], dim=1)
+
+
+def compute_supernode_coordinates(
+    assignments: torch.Tensor,
+    patch_coords: torch.Tensor,
+    n_clusters: int,
+) -> torch.Tensor:
+    coords = []
+    for cluster_idx in range(n_clusters):
+        mask = assignments == cluster_idx
+        if mask.any():
+            coords.append(patch_coords[mask].mean(dim=0))
+        else:
+            coords.append(torch.zeros(2, device=patch_coords.device, dtype=patch_coords.dtype))
+    return torch.stack(coords, dim=0)
+
+
+def build_semantic_adjacency(super_features: torch.Tensor) -> torch.Tensor:
+    zn = F.normalize(super_features, dim=1)
     sim = torch.mm(zn, zn.t())
     adjacency = (sim + 1.0) / 2.0
     adjacency.fill_diagonal_(0.0)
-    return assign, centroids, adjacency
+    return adjacency
+
+
+def build_spatial_adjacency(
+    super_coords: torch.Tensor,
+    spatial_knn: int,
+    spatial_sigma: float,
+) -> torch.Tensor:
+    if spatial_sigma <= 0:
+        raise ValueError("--spatial-sigma must be > 0")
+
+    num_nodes = super_coords.shape[0]
+    distances = torch.cdist(super_coords, super_coords, p=2)
+    adjacency = torch.exp(-(distances ** 2) / (2.0 * (spatial_sigma ** 2)))
+    adjacency.fill_diagonal_(0.0)
+
+    if spatial_knn > 0 and spatial_knn < num_nodes:
+        knn_idx = torch.topk(distances, k=spatial_knn + 1, largest=False).indices[:, 1:]
+        mask = torch.zeros_like(adjacency, dtype=torch.bool)
+        row_ids = torch.arange(num_nodes, device=super_coords.device).unsqueeze(1).expand_as(knn_idx)
+        mask[row_ids, knn_idx] = True
+        mask = mask | mask.t()
+        adjacency = adjacency * mask.to(adjacency.dtype)
+
+    max_val = adjacency.max()
+    if max_val > 0:
+        adjacency = adjacency / max_val
+    adjacency.fill_diagonal_(0.0)
+    return adjacency
+
+
+def build_super_graph(
+    tokens: torch.Tensor,
+    grid_hw: Tuple[int, int],
+    n_clusters: int,
+    seed: int,
+    edge_type: str = "semantic",
+    spatial_knn: int = 0,
+    spatial_sigma: float = 0.35,
+    hybrid_alpha: float = 0.5,
+):
+    if edge_type not in {"semantic", "spatial", "hybrid"}:
+        raise ValueError(f"Unsupported edge_type: {edge_type}")
+    if not 0.0 <= hybrid_alpha <= 1.0:
+        raise ValueError("--hybrid-alpha must be in [0, 1]")
+
+    assign, centroids = kmeans_torch(tokens, n_clusters=n_clusters, seed=seed)
+    patch_coords = build_patch_coordinates(grid_hw, device=tokens.device, dtype=tokens.dtype)
+    super_coords = compute_supernode_coordinates(assign, patch_coords, centroids.shape[0])
+
+    semantic_adjacency = build_semantic_adjacency(centroids)
+    spatial_adjacency = build_spatial_adjacency(super_coords, spatial_knn, spatial_sigma)
+
+    if edge_type == "semantic":
+        adjacency = semantic_adjacency
+    elif edge_type == "spatial":
+        adjacency = spatial_adjacency
+    else:
+        adjacency = hybrid_alpha * semantic_adjacency + (1.0 - hybrid_alpha) * spatial_adjacency
+        adjacency.fill_diagonal_(0.0)
+
+    return assign, centroids, super_coords, adjacency
 
 
 def similarity_matrix(za: torch.Tensor, zb: torch.Tensor) -> torch.Tensor:
@@ -222,13 +321,22 @@ def build_graph_from_image(
     super_nodes: int,
     seed: int,
     device: torch.device,
+    edge_type: str = "semantic",
+    spatial_knn: int = 0,
+    spatial_sigma: float = 0.35,
+    hybrid_alpha: float = 0.5,
 ) -> GraphData:
     x = preprocess_image(image_path, image_size).to(device)
     tokens, grid_hw = extract_patch_tokens(model, x)
-    assign, super_features, adjacency = build_super_graph(
+    assign, super_features, super_coords, adjacency = build_super_graph(
         tokens=tokens,
+        grid_hw=grid_hw,
         n_clusters=super_nodes,
         seed=seed,
+        edge_type=edge_type,
+        spatial_knn=spatial_knn,
+        spatial_sigma=spatial_sigma,
+        hybrid_alpha=hybrid_alpha,
     )
 
     return GraphData(
@@ -238,5 +346,6 @@ def build_graph_from_image(
         patch_grid_hw=grid_hw,
         assignments=assign.detach().cpu().numpy(),
         super_features=super_features.detach().cpu(),
+        super_coords=super_coords.detach().cpu(),
         adjacency=adjacency.detach().cpu(),
     )

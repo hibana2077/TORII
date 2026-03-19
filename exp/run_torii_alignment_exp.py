@@ -84,6 +84,10 @@ def run(args):
             super_nodes=args.super_nodes,
             seed=args.seed + idx,
             device=device,
+            edge_type=args.edge_type,
+            spatial_knn=args.spatial_knn,
+            spatial_sigma=args.spatial_sigma,
+            hybrid_alpha=args.hybrid_alpha,
         )
         graphs.append(graph)
 
@@ -137,6 +141,7 @@ def run(args):
                     "class_b": gb.class_id,
                     "pair_type": "same" if is_same else "diff",
                     "transport_mode": args.transport_mode,
+                    "edge_type": args.edge_type,
                     **scores,
                 }
             )
@@ -158,6 +163,10 @@ def run(args):
         f.write(f"num_pairs={len(rows)}\n")
         f.write(f"same_pairs={len(same_scores)}\n")
         f.write(f"diff_pairs={len(diff_scores)}\n")
+        f.write(f"edge_type={args.edge_type}\n")
+        f.write(f"spatial_knn={args.spatial_knn}\n")
+        f.write(f"spatial_sigma={args.spatial_sigma}\n")
+        f.write(f"hybrid_alpha={args.hybrid_alpha}\n")
         f.write(f"same_mean_total_score={same_mean:.6f}\n")
         f.write(f"diff_mean_total_score={diff_mean:.6f}\n")
         f.write(f"diff_minus_same={margin:.6f}\n")
@@ -184,6 +193,30 @@ def get_args():
     parser.add_argument("--pretrained", action="store_true")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--super-nodes", type=int, default=8)
+    parser.add_argument(
+        "--edge-type",
+        type=str,
+        choices=["semantic", "spatial", "hybrid"],
+        default="semantic",
+    )
+    parser.add_argument(
+        "--spatial-knn",
+        type=int,
+        default=0,
+        help="If > 0, keep only k nearest spatial neighbors per super-node.",
+    )
+    parser.add_argument(
+        "--spatial-sigma",
+        type=float,
+        default=0.35,
+        help="Gaussian width for spatial edge affinity in normalized patch coordinates.",
+    )
+    parser.add_argument(
+        "--hybrid-alpha",
+        type=float,
+        default=0.5,
+        help="Weight on semantic adjacency for hybrid edges; spatial weight is 1-alpha.",
+    )
     parser.add_argument("--transport-mode", type=str, choices=["similarity", "learned"], default="learned")
     parser.add_argument("--tau-p", type=float, default=0.07)
     parser.add_argument("--lambda-n", type=float, default=1.0, help="Weight for node feature alignment loss")

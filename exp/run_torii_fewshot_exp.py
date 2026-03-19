@@ -82,20 +82,28 @@ def choose_episode(
 
 
 def get_graph_cached(
+    args,
     image_path: Path,
     class_label: str,
     label_to_id: Dict[str, int],
-    graph_cache: Dict[Path, GraphData],
+    graph_cache: Dict[Tuple[Path, str, int, float, float], GraphData],
     model,
     image_size: int,
     super_nodes: int,
     seed_base: int,
     device: torch.device,
 ) -> GraphData:
-    if image_path not in graph_cache:
+    cache_key = (
+        image_path,
+        args.edge_type,
+        args.spatial_knn,
+        args.spatial_sigma,
+        args.hybrid_alpha,
+    )
+    if cache_key not in graph_cache:
         class_id = label_to_id[class_label]
         local_seed = seed_base + sum(image_path.name.encode("utf-8"))
-        graph_cache[image_path] = build_graph_from_image(
+        graph_cache[cache_key] = build_graph_from_image(
             model=model,
             image_path=image_path,
             class_id=class_id,
@@ -103,8 +111,12 @@ def get_graph_cached(
             super_nodes=super_nodes,
             seed=local_seed,
             device=device,
+            edge_type=args.edge_type,
+            spatial_knn=args.spatial_knn,
+            spatial_sigma=args.spatial_sigma,
+            hybrid_alpha=args.hybrid_alpha,
         )
-    return graph_cache[image_path]
+    return graph_cache[cache_key]
 
 
 def pair_score(args, ga, gb) -> Dict[str, float]:
@@ -145,7 +157,7 @@ def run(args):
     model = build_model(args.model_name, pretrained=args.pretrained, device=device)
 
     rng = np.random.default_rng(args.seed)
-    graph_cache: Dict[Path, GraphData] = {}
+    graph_cache: Dict[Tuple[Path, str, int, float, float], GraphData] = {}
 
     episode_rows = []
     sample_rows = []
@@ -172,6 +184,7 @@ def run(args):
         for gt_label, query_path in query_items:
             # Label lookup by parent mapping rather than filename convention.
             q_graph = get_graph_cached(
+                args=args,
                 image_path=query_path,
                 class_label=gt_label,
                 label_to_id=label_to_id,
@@ -188,6 +201,7 @@ def run(args):
                 scores = []
                 for support_path in support_paths:
                     s_graph = get_graph_cached(
+                        args=args,
                         image_path=support_path,
                         class_label=cls,
                         label_to_id=label_to_id,
@@ -260,6 +274,10 @@ def run(args):
         f.write(f"shot={args.shot}\n")
         f.write(f"query={args.query}\n")
         f.write(f"transport_mode={args.transport_mode}\n")
+        f.write(f"edge_type={args.edge_type}\n")
+        f.write(f"spatial_knn={args.spatial_knn}\n")
+        f.write(f"spatial_sigma={args.spatial_sigma}\n")
+        f.write(f"hybrid_alpha={args.hybrid_alpha}\n")
         f.write(f"total_queries={total_queries}\n")
         f.write(f"total_correct={total_correct}\n")
         f.write(f"overall_acc={overall_acc:.6f}\n")
@@ -297,6 +315,30 @@ def get_args():
     parser.add_argument("--pretrained", action="store_true")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--super-nodes", type=int, default=8)
+    parser.add_argument(
+        "--edge-type",
+        type=str,
+        choices=["semantic", "spatial", "hybrid"],
+        default="semantic",
+    )
+    parser.add_argument(
+        "--spatial-knn",
+        type=int,
+        default=0,
+        help="If > 0, keep only k nearest spatial neighbors per super-node.",
+    )
+    parser.add_argument(
+        "--spatial-sigma",
+        type=float,
+        default=0.35,
+        help="Gaussian width for spatial edge affinity in normalized patch coordinates.",
+    )
+    parser.add_argument(
+        "--hybrid-alpha",
+        type=float,
+        default=0.5,
+        help="Weight on semantic adjacency for hybrid edges; spatial weight is 1-alpha.",
+    )
 
     parser.add_argument("--transport-mode", type=str, choices=["similarity", "learned"], default="similarity")
     parser.add_argument("--tau-p", type=float, default=0.07)
