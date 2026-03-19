@@ -26,7 +26,6 @@ class GraphData:
     assignments: np.ndarray
     super_features: torch.Tensor
     adjacency: torch.Tensor
-    distance_matrix: torch.Tensor
 
 
 def build_model(model_name: str, pretrained: bool, device: torch.device):
@@ -111,20 +110,6 @@ def build_super_graph(tokens: torch.Tensor, n_clusters: int, seed: int):
     return assign, centroids, adjacency
 
 
-def floyd_warshall(cost: torch.Tensor) -> torch.Tensor:
-    dist = cost.clone()
-    n = dist.shape[0]
-    for k in range(n):
-        dist = torch.minimum(dist, dist[:, k : k + 1] + dist[k : k + 1, :])
-    return dist
-
-
-def graph_soft_path_distance(adjacency: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    cost = 1.0 / (adjacency + eps)
-    cost.fill_diagonal_(0.0)
-    return floyd_warshall(cost)
-
-
 def similarity_matrix(za: torch.Tensor, zb: torch.Tensor) -> torch.Tensor:
     za_n = F.normalize(za, dim=1)
     zb_n = F.normalize(zb, dim=1)
@@ -153,15 +138,9 @@ def compute_alignment_losses(
     edge_loss = torch.norm(ga.adjacency - edge_b_to_a, p="fro") ** 2
     edge_loss = edge_loss + torch.norm(gb.adjacency - edge_a_to_b, p="fro") ** 2
 
-    path_b_to_a = p_ab @ gb.distance_matrix @ p_ab.t()
-    path_a_to_b = p_ba @ ga.distance_matrix @ p_ba.t()
-    path_loss = torch.norm(ga.distance_matrix - path_b_to_a, p="fro") ** 2
-    path_loss = path_loss + torch.norm(gb.distance_matrix - path_a_to_b, p="fro") ** 2
-
     return {
         "node_loss": node_loss,
         "edge_loss": edge_loss,
-        "path_loss": path_loss,
     }
 
 
@@ -171,24 +150,16 @@ def optimize_learnable_transport(
     tau_p: float,
     lambda_n: float,
     lambda_e: float,
-    lambda_p: float,
     steps: int,
     lr: float,
-    lambda_cycle: float,
-    lambda_entropy: float,
 ) -> Dict[str, float]:
     sim = similarity_matrix(ga.super_features, gb.super_features)
     logits_ab = torch.nn.Parameter(sim / tau_p)
     logits_ba = torch.nn.Parameter(sim.t() / tau_p)
     optimizer = torch.optim.Adam([logits_ab, logits_ba], lr=lr)
 
-    eye_a = torch.eye(ga.super_features.shape[0], dtype=ga.super_features.dtype)
-    eye_b = torch.eye(gb.super_features.shape[0], dtype=gb.super_features.dtype)
-
     final_losses = None
     final_total = None
-    final_cycle = None
-    final_entropy = None
 
     for iter_idx in range(max(1, steps)):
         p_ab = torch.softmax(logits_ab, dim=1)
@@ -198,43 +169,26 @@ def optimize_learnable_transport(
         base_total = (
             lambda_n * losses["node_loss"]
             + lambda_e * losses["edge_loss"]
-            + lambda_p * losses["path_loss"]
         )
-
-        cycle_loss = torch.norm(p_ab @ p_ba - eye_a, p="fro") ** 2
-        cycle_loss = cycle_loss + torch.norm(p_ba @ p_ab - eye_b, p="fro") ** 2
-
-        entropy_ab = -(p_ab * torch.log(p_ab + 1e-8)).sum() / p_ab.shape[0]
-        entropy_ba = -(p_ba * torch.log(p_ba + 1e-8)).sum() / p_ba.shape[0]
-        entropy = entropy_ab + entropy_ba
-
-        total = base_total + lambda_cycle * cycle_loss + lambda_entropy * entropy
+        total = base_total
         optimizer.zero_grad()
         total.backward()
         optimizer.step()
 
         final_losses = losses
         final_total = total
-        final_cycle = cycle_loss
-        final_entropy = entropy
 
         # if (steps <= 10) or (iter_idx % max(1, steps // 10) == 0):
             # print(
             #     f"  step {iter_idx + 1}/{steps}, total={total.item():.4f}, "
             #     f"node={losses['node_loss'].item():.4f}, "
-            #     f"edge={losses['edge_loss'].item():.4f}, "
-            #     f"path={losses['path_loss'].item():.4f}, "
-            #     f"cycle={cycle_loss.item():.4f}, entropy={entropy.item():.4f}"
+            #     f"edge={losses['edge_loss'].item():.4f}"
             # )
 
     assert final_losses is not None and final_total is not None
-    assert final_cycle is not None and final_entropy is not None
     return {
         "node_loss": float(final_losses["node_loss"].item()),
         "edge_loss": float(final_losses["edge_loss"].item()),
-        "path_loss": float(final_losses["path_loss"].item()),
-        "cycle_loss": float(final_cycle.item()),
-        "entropy": float(final_entropy.item()),
         "total_score": float(final_total.item()),
     }
 
@@ -245,22 +199,17 @@ def alignment_score(
     tau_p: float,
     lambda_n: float,
     lambda_e: float,
-    lambda_p: float,
 ) -> Dict[str, float]:
     sim = similarity_matrix(ga.super_features, gb.super_features)
     p_ab, p_ba = bidirectional_transport(sim, tau=tau_p)
     losses = compute_alignment_losses(ga, gb, p_ab, p_ba)
     node_loss = losses["node_loss"]
     edge_loss = losses["edge_loss"]
-    path_loss = losses["path_loss"]
 
-    total = lambda_n * node_loss + lambda_e * edge_loss + lambda_p * path_loss
+    total = lambda_n * node_loss + lambda_e * edge_loss
     return {
         "node_loss": float(node_loss.item()),
         "edge_loss": float(edge_loss.item()),
-        "path_loss": float(path_loss.item()),
-        "cycle_loss": 0.0,
-        "entropy": 0.0,
         "total_score": float(total.item()),
     }
 
@@ -281,7 +230,6 @@ def build_graph_from_image(
         n_clusters=super_nodes,
         seed=seed,
     )
-    distance_matrix = graph_soft_path_distance(adjacency)
 
     return GraphData(
         image_path=image_path,
@@ -291,5 +239,4 @@ def build_graph_from_image(
         assignments=assign.detach().cpu().numpy(),
         super_features=super_features.detach().cpu(),
         adjacency=adjacency.detach().cpu(),
-        distance_matrix=distance_matrix.detach().cpu(),
     )

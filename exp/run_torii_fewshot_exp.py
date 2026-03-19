@@ -115,11 +115,8 @@ def pair_score(args, ga, gb) -> Dict[str, float]:
             tau_p=args.tau_p,
             lambda_n=args.lambda_n,
             lambda_e=args.lambda_e,
-            lambda_p=args.lambda_p,
             steps=args.perm_steps,
             lr=args.perm_lr,
-            lambda_cycle=args.lambda_cycle,
-            lambda_entropy=args.lambda_entropy,
         )
     return alignment_score(
         ga,
@@ -127,7 +124,6 @@ def pair_score(args, ga, gb) -> Dict[str, float]:
         tau_p=args.tau_p,
         lambda_n=args.lambda_n,
         lambda_e=args.lambda_e,
-        lambda_p=args.lambda_p,
     )
 
 
@@ -306,11 +302,8 @@ def get_args():
     parser.add_argument("--tau-p", type=float, default=0.07)
     parser.add_argument("--lambda-n", type=float, default=1.0)
     parser.add_argument("--lambda-e", type=float, default=1.0)
-    parser.add_argument("--lambda-p", type=float, default=1.0)
     parser.add_argument("--perm-steps", type=int, default=50)
     parser.add_argument("--perm-lr", type=float, default=0.05)
-    parser.add_argument("--lambda-cycle", type=float, default=0.1)
-    parser.add_argument("--lambda-entropy", type=float, default=0.01)
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cpu", action="store_true")

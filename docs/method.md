@@ -1,196 +1,136 @@
-可以，這個想法**是成立的**，而且其實跟你現在寫的 method 已經非常接近：你原本的核心就是先有圖，再用 pairwise path geometry (D_\tau) 去對齊，而不是只看一階 edge。你現在只是更進一步把 graph 先 **coarsen 成 8 個 super-nodes**，然後直接在這個小圖上做 path-distance alignment。這和你文件裡的
-[
-\mathcal{L}*{\text{path}}=|D*\tau^A-PD_\tau^BP^\top|_F^2
-]
-本質上是同一路線。
+# Method
 
-我直接講結論：
+## 概述
 
-## 1. 你的方向是合理的
+TORII 的核心目標是比較兩張影像在「區域關係結構」上的相似度，而不是只看整張圖的全域特徵。整體流程是先從 Vision Transformer (ViT) 擷取 patch token，將 patch 聚合成較少量的 super-node，再把每張圖表示成一個 super-node graph。之後利用跨圖的雙向 soft transport，把兩個 graph 對齊，並在節點與邊兩個層次上計算 alignment loss。
 
-如果你把原本 ((196,384)) 的 patch/token 結構先聚成 8 個大類，得到一個 8-node graph，那麼再去算這 8 個 node 之間的 distance matrix：
-[
-D(0,1), D(0,2), \dots, D(7,6)
-]
-然後拿這個矩陣去做 alignment，這其實就是在對齊**高階 relational geometry**，不是單純 local edge。這點和你 method 裡「multi-hop path consistency」的精神完全一致。
+目前專案中的可執行實作主要在 [exp/torii_core.py](/c:/Users/hiban/Desktop/code%20space/TORII/exp/torii_core.py)。
 
-而且 8 個 node 很小，計算上很舒服，訓練上也穩很多。
+## 1. 影像到 patch token
 
----
+給定影像 $I$，先做標準化與 resize，接著送入 timm 的 ViT backbone，取出 `forward_features` 的輸出，移除 prefix token 後保留 patch tokens：
 
-## 2. 但「只用 (D_{ij})」有一個前提
+$$
+X = [x_1, x_2, \dots, x_N]^\top \in \mathbb{R}^{N \times d},
+$$
 
-你要先分清楚兩種情況：
+其中 $N$ 是 patch 數量，$d$ 是 token 維度。實作上假設 patch token 可以還原成正方形 patch grid，對應程式在 [exp/torii_core.py:48](/c:/Users/hiban/Desktop/code%20space/TORII/exp/torii_core.py#L48)。
 
-### 情況 A：這 8 個類別本身有固定語意
+## 2. Patch graph coarsening: super-node 建構
 
-例如兩張圖的 node 0 都代表同一種 semantic region，node 1 也固定對應同類區塊。
+為了降低 patch graph 的規模，方法中先對 patch token 做 k-means，將 $N$ 個 patch 分成 $K$ 群。每一群的 centroid 作為一個 super-node feature：
 
-那你可以直接比：
-[
-|D^A - D^B|_F^2
-]
-甚至把上三角展平成 28 維向量去比都可以。
+$$
+Z = [z_1, z_2, \dots, z_K]^\top \in \mathbb{R}^{K \times d}.
+$$
 
-### 情況 B：這 8 個類別只是每張圖各自聚出來的
+實作上使用 torch 版本的 k-means，並以 centroid 間的 cosine similarity 建立 super-node adjacency：
 
-那 node index 沒有天然一致性，這時候**不能直接比 (D(0,1)) 對 (D(0,1))**，因為 A 圖的 cluster 0 不一定對應 B 圖的 cluster 0。
-這種情況你還是需要一個 super-node correspondence (Q)：
-[
-|D^A - QD^BQ^\top|_F^2
-]
-也就是你原本 method 裡的 (P D^B P^\top) 那套，只是現在 (P) 從 patch-level 變成 8x8 的 coarse-level 對齊。
+$$
+\mathrm{sim}(z_i, z_j) = \frac{z_i^\top z_j}{\|z_i\| \|z_j\|},
+$$
 
----
+$$
+W_{ij} = \frac{\mathrm{sim}(z_i, z_j) + 1}{2}, \qquad W_{ii}=0.
+$$
 
-## 3. 你問的重點：這樣算是對齊 edge，還是也對齊了 node？
+因此每張影像最後會被表示成一個 graph：
 
-我的答案是：
+$$
+G = (V, W), \qquad V = \{z_1, \dots, z_K\}.
+$$
 
-### **有間接對齊 node，但不等於完全解決 node alignment。**
+對應程式可見 [exp/torii_core.py:70](/c:/Users/hiban/Desktop/code%20space/TORII/exp/torii_core.py#L70) 與 [exp/torii_core.py:105](/c:/Users/hiban/Desktop/code%20space/TORII/exp/torii_core.py#L105)。
 
-原因是：
+## 3. 雙向 soft transport 對齊
 
-### 為什麼說有對齊到 node？
+給定兩張影像的 super-node feature：
 
-因為 (D_{ij}) 不是單純 edge feature，它是「**node (i) 到 node (j) 的關係**」。
-當你要求兩張圖的整個 distance matrix 對齊時，其實你在約束：
+$$
+Z^A \in \mathbb{R}^{n_A \times d}, \qquad Z^B \in \mathbb{R}^{n_B \times d},
+$$
 
-* 每個 node 在整張圖中的相對位置
-* 每個 node 到其他 node 的可達性 pattern
-* graph 的整體幾何結構
+先計算跨圖節點相似度矩陣：
 
-所以這不是只在對 edge，而是在對齊**node 的 relational role**。
+$$
+S_{ij} = \mathrm{sim}(z_i^A, z_j^B).
+$$
 
-換句話說，node 不再靠單點 feature 被對齊，而是靠「它和全圖其他點的距離簽名」被對齊。
+接著用溫度參數 $\tau_p$ 建立雙向 transport matrix：
 
----
+$$
+P^{A \leftarrow B}_{ij}
+=
+\frac{\exp(S_{ij}/\tau_p)}
+{\sum_{k=1}^{n_B}\exp(S_{ik}/\tau_p)},
+$$
 
-## 4. 但為什麼我說它不等於完整 node alignment？
+$$
+P^{B \leftarrow A}_{ji}
+=
+\frac{\exp(S_{ij}/\tau_p)}
+{\sum_{k=1}^{n_A}\exp(S_{kj}/\tau_p)}.
+$$
 
-因為只靠 distance matrix 會有 **identifiability** 問題。
+其中 $P^{A \leftarrow B}$ 表示把 graph $B$ 的資訊 transport 到 graph $A$ 的座標系；$P^{B \leftarrow A}$ 則是相反方向。這個設計避免只做單向對齊時的偏置。對應程式在 [exp/torii_core.py:128](/c:/Users/hiban/Desktop/code%20space/TORII/exp/torii_core.py#L128) 與 [exp/torii_core.py:134](/c:/Users/hiban/Desktop/code%20space/TORII/exp/torii_core.py#L134)。
 
-### 例子 1：對稱節點
+## 4. Alignment losses
 
-如果某些 node 在圖中是對稱的，它們的 distance profile 會一樣。
-那麼只看 (D)，你無法唯一知道「這個 node 到底是左邊那個還是右邊那個」。
+### 4.1 Node alignment loss
 
-### 例子 2：不同 edge 結構可能有相同 shortest-path matrix
+先用 transport 後的 super-node feature 去重建對方圖上的節點表示：
 
-最短路徑矩陣保留的是「geodesic geometry」，但不一定能唯一還原原始 adjacency。
-也就是說：
+$$
+\mathcal{L}_{\mathrm{node}}
+=
+\left\| Z^A - P^{A \leftarrow B} Z^B \right\|_F^2
++
+\left\| Z^B - P^{B \leftarrow A} Z^A \right\|_F^2.
+$$
 
-* **distance alignment 很強地約束 global structure**
-* 但不一定能唯一恢復每一條 local edge
-* 更不一定能在有對稱時唯一決定 node identity
+這一項要求對齊後的節點特徵在雙向上都要相近。
 
-所以它是：
+### 4.2 Edge consistency loss
 
-* 對 node：**間接、結構性地對齊**
-* 對 edge：**不是逐邊精確對齊，而是透過 path geometry 去約束**
+再把對方 graph 的 adjacency transport 過來，比較一階結構是否一致：
 
-因此它**不能完全替代** node loss，除非你的 8 個 coarse classes 本身就已經有穩定語意編號。
+$$
+\mathcal{L}_{\mathrm{edge}}
+=
+\left\| W^A - P^{A \leftarrow B} W^B (P^{A \leftarrow B})^\top \right\|_F^2
++
+\left\| W^B - P^{B \leftarrow A} W^A (P^{B \leftarrow A})^\top \right\|_F^2.
+$$
 
----
+這一項對應 graph 的 local relation consistency。
 
-## 5. 你這個版本其實比原始 patch-level 更像一個「coarse graph matching」
+## 5. 總目標函數
 
-你可以把方法整理成：
+總分數定義為：
 
-### Step 1
+$$
+\mathcal{L}_{\mathrm{total}}
+=
+\lambda_n \mathcal{L}_{\mathrm{node}}
++
+\lambda_e \mathcal{L}_{\mathrm{edge}}.
+$$
 
-把原本 196 個 patch node 聚成 8 個 super-nodes。
+其中 $\lambda_n$、$\lambda_e$ 分別控制節點與邊結構項的權重。
 
-### Step 2
+## 6. 直觀解釋
 
-在每張圖上建立 8-node coarse graph，邊權重可由：
+這個方法可以分成兩個層次理解：
 
-* cluster centroid similarity
-* cluster 間平均關係
-* cluster 間 attention aggregation
-* cluster 間 feature transport cost
-  來定義。
+1. `Node`：比較兩張圖是否有相似的局部語意區塊。
+2. `Edge`：比較這些區塊之間的直接關係是否相似。
 
-### Step 3
+因此，若兩張圖屬於同一類別，即使局部位置或外觀有變化，只要它們的區域關係結構仍接近，TORII 就應該得到較低的 alignment score。
 
-計算 coarse graph 的 pairwise path distance matrix (D^A, D^B)。
+## 7. 與 `method.tex` 的關係
 
-### Step 4
+[docs/method.tex](/c:/Users/hiban/Desktop/code%20space/TORII/docs/method.tex) 與這份說明現在是一致的，重點放在：
 
-做 alignment：
-
-* 若 8 類有固定語意：直接比 (D^A) 和 (D^B)
-* 若沒有固定語意：學一個 8x8 correspondence (Q)，比
-  [
-  |D^A - QD^BQ^\top|_F^2
-  ]
-
-這樣論述上會很順。
-
----
-
-## 6. 你提到 Bellman-Ford，這裡我建議改一下
-
-如果你只是**離線算最短路徑**，8 個 node 用 Bellman-Ford 當然可以，但其實不漂亮：
-
-* 若權重非負，用 **Floyd-Warshall** 或 **Dijkstra** 更自然
-* 8 個 node 超小，**Floyd-Warshall 最直觀**
-
-但如果你想把它放進訓練、要 end-to-end backprop，**離散 shortest path 不太好微分**。
-你文件裡原本已經用 soft-min path aggregation：
-[
-D_\tau(i,j)=-\tau \log \sum_{\pi\in\Pi(i,j)} \exp(-c(\pi)/\tau)
-]
-這個其實比 Bellman-Ford 更適合寫成論文主角，因為它是 differentiable 的。
-
-所以我會建議：
-
-* **idea 層面**：你說「最短路徑距離矩陣」完全合理
-* **paper method 層面**：不要真的寫 Bellman-Ford 當核心，改寫成 **soft shortest-path / soft geodesic matrix**
-* 這樣和你現在的 path-aware relation alignment 完全一致，也更學術化
-
----
-
-## 7. 我對你這個想法的精準判斷
-
-我會這樣評估：
-
-### 優點
-
-* 大幅降維，從 196 nodes 變 8 nodes，匹配穩定很多
-* 更容易學到 global structure
-* distance matrix 天然是 permutation-sensitive relational descriptor
-* 很適合當 structural regularizer
-
-### 缺點
-
-* 聚類後資訊損失大
-* 若 8 類不是跨圖一致語意，仍要解 node permutation
-* 只靠 distance matrix 可能無法區分對稱節點或局部細節
-* shortest-path 只保留 geodesic，不等於完整 graph topology
-
----
-
-## 8. 所以最後回答你那句話
-
-你說：
-
-> 表面上是對齊 edge，但實際上也間接對齊了 node 對吧?
-
-**對，這句話基本上是對的。**
-但更精確地說應該是：
-
-> 對齊 pairwise path-distance matrix 並不只是對齊 edge，而是在對齊 node 在整體圖中的 relational geometry；因此它確實會間接約束 node correspondence。
-> 不過這種約束通常只能提供「結構上的 node 對齊訊號」，不保證唯一、完整地解決 node alignment，特別是在存在對稱性或 coarse clustering 不穩定時。
-
-這樣寫會比較嚴謹。
-
----
-
-## 9. 我建議你最後把方法寫成這句
-
-你可以直接拿去改成論文語氣：
-
-> We first coarsen the original patch graph into a compact super-node graph with 8 semantic groups. Instead of enforcing edge-wise consistency directly on the dense patch graph, we align the induced pairwise soft geodesic distance matrix over super-nodes. This formulation preserves higher-order relational geometry and implicitly constrains node correspondence through their global distance signatures.
-
-如果你要，我可以直接幫你把這個想法改寫成一版正式 method paragraph，接在你現有的 `method.md` 後面。
+1. variable-cardinality 的 bidirectional super-node alignment
+2. node alignment loss
+3. edge consistency loss
